@@ -1,0 +1,15 @@
+# entornos
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# streamlit
+.streamlit/
+
+# datos locales (NO subir)
+data/
+*.db
+
+# secretos
+.env
