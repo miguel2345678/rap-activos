@@ -1,32 +1,51 @@
-import psycopg2
-import psycopg2.extras
+import os
 from pathlib import Path
 
-# =========================
-# CONFIG POSTGRES (ajusta contraseña)
-# =========================
-DB_HOST = "localhost"
-DB_PORT = 5432
-DB_NAME = "rap_activos"
-DB_USER = "postgres"
-DB_PASSWORD = "postgres12345"
+import psycopg
+from psycopg.rows import dict_row
 
-# Por compatibilidad (tu ver_db.py imprime DB_PATH)
+# =========================
+# Compatibilidad con tu proyecto
+# =========================
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-DB_PATH = f"postgresql://{DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
+def _normalize_dsn(dsn: str) -> str:
+    # Railway a veces da postgres:// y psycopg prefiere postgresql://
+    if dsn and dsn.startswith("postgres://"):
+        return "postgresql://" + dsn[len("postgres://") :]
+    return dsn
+
+def _build_local_dsn() -> str:
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "5432")
+    name = os.getenv("DB_NAME", "rap_activos")
+    user = os.getenv("DB_USER", "postgres")
+    pwd  = os.getenv("DB_PASSWORD", "")
+    return f"postgresql://{user}:{pwd}@{host}:{port}/{name}"
+
+# Para tu ver_db.py (solo imprime)
+DB_PATH = _normalize_dsn(os.getenv("DATABASE_URL", _build_local_dsn()))
 
 def get_conn():
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    )
+    """
+    Conecta a Postgres:
+    - En Railway: usa DATABASE_URL
+    - Local: usa DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD (o defaults)
+    """
+    dsn = _normalize_dsn(os.getenv("DATABASE_URL"))
+    if not dsn:
+        dsn = _build_local_dsn()
 
+    # En Railway casi siempre debes usar SSL
+    # (si no hace falta, no pasa nada, psycopg negocia)
+    sslmode = os.getenv("PGSSLMODE", "require") if os.getenv("DATABASE_URL") else os.getenv("PGSSLMODE", "prefer")
+
+    return psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+        sslmode=sslmode,
+    )
 
 def qone(sql: str, params=()):
     conn = get_conn()
@@ -38,7 +57,6 @@ def qone(sql: str, params=()):
     finally:
         conn.close()
 
-
 def qall(sql: str, params=()):
     conn = get_conn()
     try:
@@ -49,7 +67,6 @@ def qall(sql: str, params=()):
     finally:
         conn.close()
 
-
 def exec_sql(sql: str, params=()):
     conn = get_conn()
     try:
@@ -57,7 +74,7 @@ def exec_sql(sql: str, params=()):
             cur.execute(sql, params)
 
             last = None
-            # Si el INSERT tiene RETURNING id, obtenemos el id
+            # Si el INSERT trae RETURNING id, lo capturamos
             try:
                 r = cur.fetchone()
                 if r and "id" in r:
@@ -70,19 +87,16 @@ def exec_sql(sql: str, params=()):
     finally:
         conn.close()
 
-
 def init_db():
     """
-    En Postgres NO vamos a leer schema.sql (porque el tuyo es SQLite).
-    Aquí asumimos que YA creaste tablas en pgAdmin.
-    Solo hacemos el SEED (comités y admin/operador) si no existen.
+    En Railway NO leemos schema.sql automáticamente aquí.
+    (Se crean tablas una vez en la DB de Railway y listo)
+    Aquí solo hacemos SEED si está vacío.
     """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # =========================
             # 1) Seed comités
-            # =========================
             comites = [
                 "Control interno",
                 "Direccion de planeacion",
@@ -97,11 +111,12 @@ def init_db():
 
             if total_comites == 0:
                 for c in comites:
-                    cur.execute("INSERT INTO comites(nombre) VALUES (%s) ON CONFLICT DO NOTHING", (c,))
+                    cur.execute(
+                        "INSERT INTO comites(nombre) VALUES (%s) ON CONFLICT DO NOTHING",
+                        (c,),
+                    )
 
-            # =========================
-            # 2) Seed catálogos (opcional)
-            # =========================
+            # 2) Seed catálogos
             categorias = ["Equipos TI", "Mobiliario", "Herramientas"]
             ubicaciones = ["Sede Principal", "Administración", "Planeación"]
             responsables = ["Sin asignar", "Administrador RAP"]
@@ -113,14 +128,11 @@ def init_db():
             for r in responsables:
                 cur.execute("INSERT INTO responsables(nombre) VALUES (%s) ON CONFLICT DO NOTHING", (r,))
 
-            # =========================
             # 3) Admin + Operador demo
-            # =========================
             cur.execute("SELECT id FROM comites WHERE nombre=%s", ("Control interno",))
             row = cur.fetchone()
             default_comite_id = row["id"] if row else None
 
-            # Admin
             cur.execute(
                 """
                 INSERT INTO usuarios(nombre, usuario, clave, rol, comite_id)
@@ -130,7 +142,6 @@ def init_db():
                 ("Admin RAP", "admin", "admin123", "ADMIN", None),
             )
 
-            # Operador demo
             cur.execute(
                 """
                 INSERT INTO usuarios(nombre, usuario, clave, rol, comite_id)
@@ -140,7 +151,6 @@ def init_db():
                 ("Operador RAP", "operador", "operador123", "OPERADOR", default_comite_id),
             )
 
-            # Reparar operadores viejos sin comité
             if default_comite_id is not None:
                 cur.execute(
                     "UPDATE usuarios SET comite_id=%s WHERE rol='OPERADOR' AND comite_id IS NULL",
