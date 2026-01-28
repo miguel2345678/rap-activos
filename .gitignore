@@ -1,15 +1,27 @@
 # entornos
 .venv/
 venv/
+env/
+ENV/
 __pycache__/
 *.pyc
+*.pyo
 
 # streamlit
 .streamlit/
 
-# datos locales (NO subir)
+# datos locales / DBs
 data/
 *.db
+*.sqlite3
+*.sqlite3-journal
 
 # secretos
 .env
+.envrc
+
+# logs / caches
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
