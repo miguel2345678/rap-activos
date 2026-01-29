@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 import psycopg
-from psycopg.rows import dict_row
+from  psycopg.rows import dict_row
 
 # Por compatibilidad con ver_db.py (solo informativo)
 BASE_DIR = Path(__file__).resolve().parent
@@ -12,6 +12,7 @@ DB_PATH = os.getenv("DATABASE_URL", "postgresql://localhost:5432/rap_activos")
 
 def get_conn():
     dsn = os.getenv("DATABASE_URL")
+    print("DEBUG DATABASE_URL:", repr(dsn)) 
     if not dsn:
         # Fallback LOCAL (tu PC)
         dsn = (
