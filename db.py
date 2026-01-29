@@ -4,48 +4,34 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
-# =========================
-# Compatibilidad con tu proyecto
-# =========================
+# Por compatibilidad con ver_db.py (solo informativo)
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
+DB_PATH = os.getenv("DATABASE_URL", "postgresql://localhost:5432/rap_activos")
 
-def _normalize_dsn(dsn: str) -> str:
-    # Railway a veces da postgres:// y psycopg prefiere postgresql://
-    if dsn and dsn.startswith("postgres://"):
-        return "postgresql://" + dsn[len("postgres://") :]
-    return dsn
-
-def _build_local_dsn() -> str:
-    host = os.getenv("DB_HOST", "localhost")
-    port = os.getenv("DB_PORT", "5432")
-    name = os.getenv("DB_NAME", "rap_activos")
-    user = os.getenv("DB_USER", "postgres")
-    pwd  = os.getenv("DB_PASSWORD", "")
-    return f"postgresql://{user}:{pwd}@{host}:{port}/{name}"
-
-# Para tu ver_db.py (solo imprime)
-DB_PATH = _normalize_dsn(os.getenv("DATABASE_URL", _build_local_dsn()))
 
 def get_conn():
-    """
-    Conecta a Postgres:
-    - En Railway: usa DATABASE_URL
-    - Local: usa DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD (o defaults)
-    """
-    dsn = _normalize_dsn(os.getenv("DATABASE_URL"))
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        dsn = _build_local_dsn()
+        # Fallback LOCAL (tu PC)
+        dsn = (
+            f"postgresql://{os.getenv('DB_USER','postgres')}:"
+            f"{os.getenv('DB_PASSWORD','')}@"
+            f"{os.getenv('DB_HOST','localhost')}:"
+            f"{os.getenv('DB_PORT','5432')}/"
+            f"{os.getenv('DB_NAME','rap_activos')}"
+        )
 
-    # En Railway casi siempre debes usar SSL
-    # (si no hace falta, no pasa nada, psycopg negocia)
-    sslmode = os.getenv("PGSSLMODE", "require") if os.getenv("DATABASE_URL") else os.getenv("PGSSLMODE", "prefer")
+    # En Railway normalmente se requiere TLS/SSL.
+    # Con psycopg v3, sslmode va como parámetro.
+    sslmode = os.getenv("PGSSLMODE", "require")
 
     return psycopg.connect(
         dsn,
         row_factory=dict_row,
         sslmode=sslmode,
     )
+
 
 def qone(sql: str, params=()):
     conn = get_conn()
@@ -57,6 +43,7 @@ def qone(sql: str, params=()):
     finally:
         conn.close()
 
+
 def qall(sql: str, params=()):
     conn = get_conn()
     try:
@@ -67,6 +54,7 @@ def qall(sql: str, params=()):
     finally:
         conn.close()
 
+
 def exec_sql(sql: str, params=()):
     conn = get_conn()
     try:
@@ -74,7 +62,6 @@ def exec_sql(sql: str, params=()):
             cur.execute(sql, params)
 
             last = None
-            # Si el INSERT trae RETURNING id, lo capturamos
             try:
                 r = cur.fetchone()
                 if r and "id" in r:
@@ -87,16 +74,17 @@ def exec_sql(sql: str, params=()):
     finally:
         conn.close()
 
+
 def init_db():
     """
-    En Railway NO leemos schema.sql automáticamente aquí.
-    (Se crean tablas una vez en la DB de Railway y listo)
-    Aquí solo hacemos SEED si está vacío.
+    En Railway NO uses schema.sql SQLite.
+    Aquí solo hacemos seed si las tablas YA existen.
+    (Luego te paso el SQL para crear tablas en Railway si aún no están.)
     """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # 1) Seed comités
+            # Seed comités si está vacío
             comites = [
                 "Control interno",
                 "Direccion de planeacion",
@@ -116,19 +104,28 @@ def init_db():
                         (c,),
                     )
 
-            # 2) Seed catálogos
+            # Seed catálogos
             categorias = ["Equipos TI", "Mobiliario", "Herramientas"]
             ubicaciones = ["Sede Principal", "Administración", "Planeación"]
             responsables = ["Sin asignar", "Administrador RAP"]
 
             for c in categorias:
-                cur.execute("INSERT INTO categorias(nombre) VALUES (%s) ON CONFLICT DO NOTHING", (c,))
+                cur.execute(
+                    "INSERT INTO categorias(nombre) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (c,),
+                )
             for u in ubicaciones:
-                cur.execute("INSERT INTO ubicaciones(nombre) VALUES (%s) ON CONFLICT DO NOTHING", (u,))
+                cur.execute(
+                    "INSERT INTO ubicaciones(nombre) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (u,),
+                )
             for r in responsables:
-                cur.execute("INSERT INTO responsables(nombre) VALUES (%s) ON CONFLICT DO NOTHING", (r,))
+                cur.execute(
+                    "INSERT INTO responsables(nombre) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (r,),
+                )
 
-            # 3) Admin + Operador demo
+            # Admin + Operador demo
             cur.execute("SELECT id FROM comites WHERE nombre=%s", ("Control interno",))
             row = cur.fetchone()
             default_comite_id = row["id"] if row else None
